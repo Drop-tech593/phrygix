@@ -1,9 +1,8 @@
 /**
- * TempMail - Temporary Email Service
+ * Phrygix — Temporary Email Service
  * Powered by Mail.tm API (https://docs.mail.tm)
  * 
- * A client-side temporary email application that creates disposable
- * email addresses and fetches incoming messages in real-time.
+ * Anonymous disposable email addresses. Burn after use.
  */
 
 'use strict';
@@ -13,7 +12,7 @@ class TempMail {
         // API Configuration
         this.BASE_URL = 'https://api.mail.tm';
         this.REFRESH_INTERVAL = 10000; // 10 seconds
-        this.STORAGE_KEY = 'tempmail_account_v1';
+        this.STORAGE_KEY = 'phrygix_account_v1';
 
         // Account State
         this.token = null;
@@ -27,9 +26,11 @@ class TempMail {
         this.knownMessageIds = new Set();
         this.isFetching = false;
         this.currentMessages = [];
+        this.hasBaseline = false;
 
         this.initElements();
         this.bindEvents();
+        this.initNodeId();
         this.restoreSession();
     }
 
@@ -52,7 +53,8 @@ class TempMail {
             modalFrom: document.getElementById('modalFrom'),
             modalDate: document.getElementById('modalDate'),
             modalBody: document.getElementById('modalBody'),
-            closeModal: document.getElementById('closeModal')
+            closeModal: document.getElementById('closeModal'),
+            nodeId: document.getElementById('nodeId')
         };
     }
 
@@ -68,7 +70,7 @@ class TempMail {
             if (e.target === this.el.modal) this.closeModalView();
         });
 
-        // Close modal on ESC key
+        // Close modal on ESC
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.el.modal.classList.contains('active')) {
                 this.closeModalView();
@@ -84,6 +86,12 @@ class TempMail {
                 this.fetchMessages();
             }
         });
+    }
+
+    initNodeId() {
+        if (!this.el.nodeId) return;
+        const id = 'NX-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+        this.el.nodeId.textContent = id;
     }
 
     /* ==========================================================
@@ -136,7 +144,7 @@ class TempMail {
        ========================================================== */
 
     async generateEmail() {
-        this.setButtonLoading(this.el.generateBtn, 'Generating...');
+        this.setButtonLoading(this.el.generateBtn, 'GENERATING...');
 
         try {
             // Step 1: Fetch available domains
@@ -160,12 +168,13 @@ class TempMail {
             this.password = password;
             this.knownMessageIds.clear();
             this.currentMessages = [];
+            this.hasBaseline = false;
 
             this.el.emailInput.value = address;
             this.enableButtons();
             this.clearMessages();
             this.saveSession();
-            this.showToast('✅ Email address generated!');
+            this.showToast('>> ADDRESS GENERATED');
             this.startAutoRefresh();
 
             // Immediate first fetch
@@ -173,9 +182,9 @@ class TempMail {
 
         } catch (err) {
             console.error('Generate error:', err);
-            this.showToast(err.message || 'Failed to generate email', true);
+            this.showToast('!! ' + (err.message || 'FAILED TO GENERATE'), true);
         } finally {
-            this.resetButton(this.el.generateBtn, 'Generate New Email');
+            this.resetButton(this.el.generateBtn, 'GENERATE ADDRESS');
         }
     }
 
@@ -184,7 +193,7 @@ class TempMail {
         const list = this.getCollection(res);
         if (!list.length) return null;
 
-        // Prefer a domain that supports receiving mail
+        // Prefer a domain that's active
         const active = list.find(d => d.isActive !== false) || list[0];
         return active.domain;
     }
@@ -218,14 +227,14 @@ class TempMail {
         this.isFetching = true;
 
         if (showSpinner) {
-            this.el.refreshBtn.innerHTML = '<span class="loading"></span> Refreshing...';
+            this.el.refreshBtn.innerHTML = '<span class="loading"></span> REFRESHING...';
             this.el.refreshBtn.disabled = true;
         }
 
         try {
             const res = await this.request('/messages?page=1', {}, true);
 
-            // Handle auth errors
+            // Auth expired
             if (res === null) {
                 this.handleAuthError();
                 return;
@@ -238,26 +247,31 @@ class TempMail {
 
         } catch (err) {
             console.error('Fetch error:', err);
-            if (showSpinner) this.showToast('Failed to refresh inbox', true);
+            if (showSpinner) this.showToast('!! ' + err.message, true);
         } finally {
             this.isFetching = false;
             if (showSpinner) {
-                this.resetButton(this.el.refreshBtn, '🔄 Refresh Inbox');
+                this.resetButton(this.el.refreshBtn, '⟳ REFRESH INBOX');
             }
         }
     }
 
     detectNewMessages(messages) {
-        if (!messages.length) return;
+        if (!messages.length) {
+            this.hasBaseline = true;
+            return;
+        }
 
         const incoming = messages.filter(m => !this.knownMessageIds.has(m.id));
         messages.forEach(m => this.knownMessageIds.add(m.id));
 
-        // Only notify if we already had a baseline (avoid notifying on first load)
-        if (incoming.length > 0 && this.knownMessageIds.size > incoming.length) {
+        // Only notify if we already had a baseline (skip first load)
+        if (this.hasBaseline && incoming.length > 0) {
             const count = incoming.length;
-            this.showToast(`📬 ${count} new message${count > 1 ? 's' : ''}!`);
+            this.showToast(`>> ${count} NEW TRANSMISSION${count > 1 ? 'S' : ''} INTERCEPTED`);
         }
+
+        this.hasBaseline = true;
     }
 
     /* ==========================================================
@@ -270,8 +284,9 @@ class TempMail {
         if (messages.length === 0) {
             this.el.messages.innerHTML = `
                 <div class="empty-state">
-                    <span class="empty-icon">📭</span>
-                    <p>No messages yet. Waiting for incoming mail...</p>
+                    <div class="empty-glyph">&gt;_</div>
+                    <p>No transmissions intercepted.</p>
+                    <p class="empty-hint">Generate an address to begin monitoring.</p>
                 </div>
             `;
             return;
@@ -284,9 +299,9 @@ class TempMail {
 
         this.el.messages.innerHTML = sorted.map(msg => `
             <div class="message-item" data-id="${this.escapeAttr(msg.id)}" role="button" tabindex="0">
-                <div class="msg-from">${this.escapeHtml(msg.from?.address || 'Unknown sender')}</div>
-                <div class="msg-subject">${this.escapeHtml(msg.subject || '(No subject)')}</div>
-                <div class="msg-preview">${this.escapeHtml(msg.intro || 'No preview available')}</div>
+                <div class="msg-from">${this.escapeHtml(msg.from?.address || 'unknown@relay')}</div>
+                <div class="msg-subject">${this.escapeHtml(msg.subject || '(no subject)')}</div>
+                <div class="msg-preview">${this.escapeHtml(msg.intro || 'no preview available')}</div>
                 <div class="msg-date">${this.formatDate(msg.createdAt)}</div>
             </div>
         `).join('');
@@ -308,13 +323,13 @@ class TempMail {
         try {
             const msg = await this.request(`/messages/${id}`, {}, true);
             if (!msg || !msg.id) {
-                this.showToast('Message no longer available', true);
+                this.showToast('!! MESSAGE NO LONGER AVAILABLE', true);
                 this.fetchMessages();
                 return;
             }
 
-            this.el.modalSubject.textContent = msg.subject || '(No subject)';
-            this.el.modalFrom.textContent = msg.from?.address || 'Unknown';
+            this.el.modalSubject.textContent = msg.subject || '(no subject)';
+            this.el.modalFrom.textContent = msg.from?.address || 'unknown';
             this.el.modalDate.textContent = this.formatDate(msg.createdAt, true);
 
             this.renderMessageBody(msg);
@@ -323,7 +338,7 @@ class TempMail {
 
         } catch (err) {
             console.error('View message error:', err);
-            this.showToast('Failed to load message', true);
+            this.showToast('!! FAILED TO LOAD MESSAGE', true);
         }
     }
 
@@ -346,7 +361,7 @@ class TempMail {
             doc.write(this.buildIframeDocument(htmlParts.join('\n')));
             doc.close();
 
-            // Auto-resize iframe
+            // Auto-resize
             iframe.addEventListener('load', () => {
                 try {
                     const h = doc.documentElement.scrollHeight;
@@ -361,8 +376,8 @@ class TempMail {
             body.appendChild(pre);
         } else {
             const p = document.createElement('p');
-            p.style.color = 'var(--text-muted)';
-            p.textContent = '(Empty message)';
+            p.style.color = 'var(--text-mute)';
+            p.textContent = '(empty transmission)';
             body.appendChild(p);
         }
     }
@@ -388,7 +403,7 @@ class TempMail {
         overflow-wrap: break-word;
     }
     img { max-width: 100%; height: auto; }
-    a { color: #6366f1; }
+    a { color: #00b8cc; }
     table { max-width: 100%; }
     pre { white-space: pre-wrap; word-wrap: break-word; }
 </style>
@@ -409,7 +424,7 @@ class TempMail {
 
     async deleteAccount() {
         if (!this.token) return;
-        if (!confirm('Delete this email address? This cannot be undone.')) return;
+        if (!confirm('Terminate this address? This action is irreversible.')) return;
 
         try {
             if (this.accountId) {
@@ -424,12 +439,12 @@ class TempMail {
 
         this.clearSession();
         this.resetUI();
-        this.showToast('🗑️ Email address deleted');
+        this.showToast('>> SESSION TERMINATED');
     }
 
     async copyEmail() {
         if (!this.email) {
-            this.showToast('Generate an email first', true);
+            this.showToast('!! GENERATE AN ADDRESS FIRST', true);
             return;
         }
 
@@ -439,10 +454,10 @@ class TempMail {
             } else {
                 this.fallbackCopy(this.email);
             }
-            this.showToast('📋 Email copied to clipboard!');
+            this.showToast('>> COPIED TO CLIPBOARD');
         } catch (err) {
             console.error('Copy error:', err);
-            this.showToast('Failed to copy', true);
+            this.showToast('!! COPY FAILED', true);
         }
     }
 
@@ -487,6 +502,7 @@ class TempMail {
         this.password = null;
         this.knownMessageIds.clear();
         this.currentMessages = [];
+        this.hasBaseline = false;
 
         this.el.emailInput.value = '';
         this.el.refreshBtn.disabled = true;
@@ -497,7 +513,7 @@ class TempMail {
     handleAuthError() {
         this.clearSession();
         this.resetUI();
-        this.showToast('Session expired. Generate a new email.', true);
+        this.showToast('!! SESSION EXPIRED — REGENERATE', true);
     }
 
     enableButtons() {
@@ -509,8 +525,9 @@ class TempMail {
         this.el.messageCount.textContent = '0';
         this.el.messages.innerHTML = `
             <div class="empty-state">
-                <span class="empty-icon">📭</span>
-                <p>No messages yet. Waiting for incoming mail...</p>
+                <div class="empty-glyph">&gt;_</div>
+                <p>No transmissions intercepted.</p>
+                <p class="empty-hint">Generate an address to begin monitoring.</p>
             </div>
         `;
     }
@@ -533,18 +550,13 @@ class TempMail {
         clearTimeout(this.toastTimer);
         this.toastTimer = setTimeout(() => {
             this.el.toast.classList.remove('show');
-        }, 3000);
+        }, 3200);
     }
 
     /* ==========================================================
-       HTTP HELPER
+       HTTP HELPER (with detailed error handling)
        ========================================================== */
 
-    /**
-     * Generic fetch wrapper for Mail.tm API.
-     * Returns parsed JSON, or null on auth failure (401).
-     * Throws on other errors.
-     */
     async request(path, options = {}, requiresAuth = false) {
         const headers = { 'Accept': 'application/json' };
 
@@ -557,11 +569,21 @@ class TempMail {
             headers['Authorization'] = `Bearer ${this.token}`;
         }
 
-        const response = await fetch(`${this.BASE_URL}${path}`, {
-            method: options.method || 'GET',
-            headers,
-            body: options.body ? JSON.stringify(options.body) : undefined
-        });
+        let response;
+        try {
+            response = await fetch(`${this.BASE_URL}${path}`, {
+                method: options.method || 'GET',
+                headers,
+                body: options.body ? JSON.stringify(options.body) : undefined,
+                mode: 'cors',
+                cache: 'no-store'
+            });
+        } catch (networkErr) {
+            console.error('Network error on', path, networkErr);
+            throw new Error(
+                'Network blocked. Disable ad-blockers or try incognito.'
+            );
+        }
 
         // Auth expired / invalid
         if (response.status === 401) {
@@ -570,7 +592,12 @@ class TempMail {
 
         // Rate limited
         if (response.status === 429) {
-            throw new Error('Too many requests. Please slow down.');
+            throw new Error('Rate limited. Wait 60s and retry.');
+        }
+
+        // Forbidden
+        if (response.status === 403) {
+            throw new Error('Request forbidden (403).');
         }
 
         if (!response.ok) {
@@ -582,7 +609,6 @@ class TempMail {
             throw new Error(detail);
         }
 
-        // 204 No Content
         if (response.status === 204) return {};
 
         return response.json();
@@ -590,7 +616,6 @@ class TempMail {
 
     /**
      * Normalize Mail.tm collection responses.
-     * Mail.tm returns { "hydra:member": [...] } or a plain array.
      */
     getCollection(data) {
         if (!data) return [];
@@ -611,7 +636,6 @@ class TempMail {
         let charset = letters + digits + letters.toUpperCase();
         if (includeSymbols) charset += symbols;
 
-        // Use crypto when available for better randomness
         const cryptoObj = window.crypto || window.msCrypto;
         if (cryptoObj && cryptoObj.getRandomValues) {
             const bytes = new Uint8Array(length);
@@ -623,7 +647,6 @@ class TempMail {
             return out;
         }
 
-        // Fallback
         let out = '';
         for (let i = 0; i < length; i++) {
             out += charset[Math.floor(Math.random() * charset.length)];
@@ -644,7 +667,7 @@ class TempMail {
         }
 
         const diffSec = (Date.now() - date.getTime()) / 1000;
-        if (diffSec < 60) return 'Just now';
+        if (diffSec < 60) return 'just now';
         if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
         if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
         if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
@@ -673,8 +696,8 @@ class TempMail {
 
 document.addEventListener('DOMContentLoaded', () => {
     try {
-        window.tempMail = new TempMail();
+        window.phrygix = new TempMail();
     } catch (err) {
-        console.error('Failed to initialize TempMail:', err);
+        console.error('Failed to initialize Phrygix:', err);
     }
 });

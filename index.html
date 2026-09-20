@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phrygix // Temporary Email Service</title>
+    <meta name="description" content="Phrygix — Anonymous disposable email addresses. Burn after use.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Scanline overlay -->
+    <div class="scanlines" aria-hidden="true"></div>
+    <div class="grid-bg" aria-hidden="true"></div>
+
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-glyph" aria-hidden="true">
+                    <span class="glyph-layer glyph-cyan">PHRYGIX</span>
+                    <span class="glyph-layer glyph-magenta">PHRYGIX</span>
+                    <span class="glyph-layer glyph-base">PHRYGIX</span>
+                </span>
+                <span class="logo-cursor" aria-hidden="true">_</span>
+            </div>
+            <p class="tagline">
+                <span class="tag-prefix">&gt;_</span>
+                Anonymous disposable email. Burn after use.
+            </p>
+            <div class="status-bar">
+                <span class="status-item">
+                    <span class="status-dot"></span> SYSTEM ONLINE
+                </span>
+                <span class="status-item">ENCRYPTION: <span class="accent-cyan">AES-256</span></span>
+                <span class="status-item">NODE: <span class="accent-magenta" id="nodeId">—</span></span>
+            </div>
+        </header>
+
+        <main>
+            <section class="email-box">
+                <div class="panel-label">
+                    <span class="label-bracket">[</span> GENERATED ADDRESS <span class="label-bracket">]</span>
+                </div>
+                <div class="email-display">
+                    <input type="text" id="emailAddress" readonly placeholder="> awaiting generation...">
+                    <button id="copyBtn" class="icon-btn" title="Copy email" aria-label="Copy email">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="actions">
+                    <button id="generateBtn" class="btn primary">
+                        <span class="btn-glitch-text">GENERATE ADDRESS</span>
+                    </button>
+                    <button id="refreshBtn" class="btn secondary" disabled>
+                        ⟳ REFRESH INBOX
+                    </button>
+                    <button id="deleteBtn" class="btn danger" disabled>
+                        ✕ TERMINATE
+                    </button>
+                </div>
+            </section>
+
+            <section class="inbox">
+                <div class="inbox-header">
+                    <div class="panel-label">
+                        <span class="label-bracket">[</span> INBOX <span class="label-bracket">]</span>
+                    </div>
+                    <span id="messageCount" class="badge">0</span>
+                    <span id="autoRefresh" class="auto-refresh">
+                        <span class="pulse-dot"></span>
+                        LIVE FEED
+                    </span>
+                </div>
+                <div id="messages" class="messages">
+                    <div class="empty-state">
+                        <div class="empty-glyph">&gt;_</div>
+                        <p>No transmissions intercepted.</p>
+                        <p class="empty-hint">Generate an address to begin monitoring.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p class="footer-warn">⚠ DO NOT USE FOR SENSITIVE DATA // EDUCATIONAL USE ONLY</p>
+            <p>POWERED BY <a href="https://mail.tm" target="_blank" rel="noopener">MAIL.TM</a> // BUILT FOR ANONYMITY</p>
+        </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- Message Viewer Modal -->
+    <div id="modal" class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <div class="panel-label small">[ TRANSMISSION DECRYPTED ]</div>
+                    <h3 id="modalSubject">Subject</h3>
+                </div>
+                <button id="closeModal" class="close-btn" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="message-meta">
+                    <p><span class="meta-key">FROM</span> <span id="modalFrom" class="meta-val"></span></p>
+                    <p><span class="meta-key">DATE</span> <span id="modalDate" class="meta-val"></span></p>
+                </div>
+                <div id="modalBody" class="message-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

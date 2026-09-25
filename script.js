@@ -1,6 +1,6 @@
 /**
  * Phrygix — Temporary Email Service
- * Powered by Mail.tm API (https://docs.mail.tm)
+ * Powered by Mail.tm via the @cemalgnlts/mailjs wrapper
  * 
  * Anonymous disposable email addresses. Burn after use.
  */
@@ -9,8 +9,10 @@
 
 class TempMail {
     constructor() {
-        // API Configuration
-        this.BASE_URL = 'https://api.mail.tm';
+        // Initialize the Mailjs client
+        this.mailjs = new Mailjs();
+
+        // Configuration
         this.REFRESH_INTERVAL = 10000; // 10 seconds
         this.STORAGE_KEY = 'phrygix_account_v1';
 
@@ -65,22 +67,18 @@ class TempMail {
         this.el.copyBtn.addEventListener('click', () => this.copyEmail());
         this.el.closeModal.addEventListener('click', () => this.closeModalView());
 
-        // Close modal on backdrop click
         this.el.modal.addEventListener('click', (e) => {
             if (e.target === this.el.modal) this.closeModalView();
         });
 
-        // Close modal on ESC
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.el.modal.classList.contains('active')) {
                 this.closeModalView();
             }
         });
 
-        // Cleanup on page unload
         window.addEventListener('beforeunload', () => this.stopAutoRefresh());
 
-        // Resume fetching when tab becomes visible again
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden && this.token) {
                 this.fetchMessages();
@@ -110,6 +108,10 @@ class TempMail {
             this.accountId = data.accountId;
             this.email = data.email;
             this.password = data.password;
+
+            // Restore Mailjs auth state
+            this.mailjs.token = data.token;
+            this.mailjs.id = data.accountId;
 
             this.el.emailInput.value = this.email;
             this.enableButtons();
@@ -147,23 +149,25 @@ class TempMail {
         this.setButtonLoading(this.el.generateBtn, 'GENERATING...');
 
         try {
-            // Step 1: Fetch available domains
-            const domain = await this.fetchAvailableDomain();
-            if (!domain) throw new Error('No email domains available');
+            // Step 1: Create a new disposable account
+            const account = await this.mailjs.createOneAccount();
 
-            // Step 2: Build credentials
-            const address = `${this.randomString(12)}@${domain}`;
-            const password = this.randomString(16, true);
+            if (!account.status) {
+                throw new Error(account.message || 'Failed to create account');
+            }
 
-            // Step 3: Create account
-            const account = await this.createAccount(address, password);
+            const { address, password } = account.data;
 
-            // Step 4: Get auth token
-            const token = await this.getToken(address, password);
+            // Step 2: Log in to obtain a JWT token
+            const login = await this.mailjs.login(address, password);
 
-            // Step 5: Update state
-            this.token = token;
-            this.accountId = account.id;
+            if (!login.status) {
+                throw new Error(login.message || 'Login failed');
+            }
+
+            // Step 3: Save state
+            this.token = this.mailjs.token;
+            this.accountId = this.mailjs.id;
             this.email = address;
             this.password = password;
             this.knownMessageIds.clear();
@@ -188,36 +192,6 @@ class TempMail {
         }
     }
 
-    async fetchAvailableDomain() {
-        const res = await this.request('/domains?page=1');
-        const list = this.getCollection(res);
-        if (!list.length) return null;
-
-        // Prefer a domain that's active
-        const active = list.find(d => d.isActive !== false) || list[0];
-        return active.domain;
-    }
-
-    async createAccount(address, password) {
-        const res = await this.request('/accounts', {
-            method: 'POST',
-            body: { address, password }
-        });
-
-        if (!res.id) throw new Error('Invalid account response');
-        return res;
-    }
-
-    async getToken(address, password) {
-        const res = await this.request('/token', {
-            method: 'POST',
-            body: { address, password }
-        });
-
-        if (!res.token) throw new Error('Authentication failed');
-        return res.token;
-    }
-
     /* ==========================================================
        FETCHING MESSAGES
        ========================================================== */
@@ -232,15 +206,30 @@ class TempMail {
         }
 
         try {
-            const res = await this.request('/messages?page=1', {}, true);
+            const result = await this.mailjs.getMessages();
 
-            // Auth expired
-            if (res === null) {
-                this.handleAuthError();
-                return;
+            if (!result.status) {
+                // Session expired
+                if (result.statusCode === 401) {
+                    this.handleAuthError();
+                    return;
+                }
+                throw new Error(result.message || 'Failed to fetch messages');
             }
 
-            const messages = this.getCollection(res);
+            // Normalize response to a plain array
+            let messages = result.data;
+            if (messages && !Array.isArray(messages)) {
+                if (Array.isArray(messages['hydra:member'])) {
+                    messages = messages['hydra:member'];
+                } else if (Array.isArray(messages.member)) {
+                    messages = messages.member;
+                } else {
+                    messages = [];
+                }
+            }
+            if (!Array.isArray(messages)) messages = [];
+
             this.detectNewMessages(messages);
             this.renderMessages(messages);
             this.currentMessages = messages;
@@ -265,7 +254,6 @@ class TempMail {
         const incoming = messages.filter(m => !this.knownMessageIds.has(m.id));
         messages.forEach(m => this.knownMessageIds.add(m.id));
 
-        // Only notify if we already had a baseline (skip first load)
         if (this.hasBaseline && incoming.length > 0) {
             const count = incoming.length;
             this.showToast(`>> ${count} NEW TRANSMISSION${count > 1 ? 'S' : ''} INTERCEPTED`);
@@ -292,7 +280,6 @@ class TempMail {
             return;
         }
 
-        // Sort newest first
         const sorted = [...messages].sort(
             (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
         );
@@ -306,7 +293,6 @@ class TempMail {
             </div>
         `).join('');
 
-        // Attach click + keyboard listeners
         this.el.messages.querySelectorAll('.message-item').forEach(el => {
             const id = el.dataset.id;
             el.addEventListener('click', () => this.viewMessage(id));
@@ -321,12 +307,15 @@ class TempMail {
 
     async viewMessage(id) {
         try {
-            const msg = await this.request(`/messages/${id}`, {}, true);
-            if (!msg || !msg.id) {
+            const result = await this.mailjs.getMessage(id);
+
+            if (!result.status) {
                 this.showToast('!! MESSAGE NO LONGER AVAILABLE', true);
                 this.fetchMessages();
                 return;
             }
+
+            const msg = result.data;
 
             this.el.modalSubject.textContent = msg.subject || '(no subject)';
             this.el.modalFrom.textContent = msg.from?.address || 'unknown';
@@ -350,7 +339,6 @@ class TempMail {
         const textBody = Array.isArray(msg.text) ? msg.text.join('\n') : (msg.text || '');
 
         if (htmlParts.length > 0) {
-            // Render HTML safely in a sandboxed iframe
             const iframe = document.createElement('iframe');
             iframe.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
             iframe.setAttribute('referrerpolicy', 'no-referrer');
@@ -361,7 +349,6 @@ class TempMail {
             doc.write(this.buildIframeDocument(htmlParts.join('\n')));
             doc.close();
 
-            // Auto-resize
             iframe.addEventListener('load', () => {
                 try {
                     const h = doc.documentElement.scrollHeight;
@@ -427,12 +414,7 @@ class TempMail {
         if (!confirm('Terminate this address? This action is irreversible.')) return;
 
         try {
-            if (this.accountId) {
-                await fetch(`${this.BASE_URL}/accounts/${this.accountId}`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${this.token}` }
-                }).catch(() => { /* ignore */ });
-            }
+            await this.mailjs.deleteMe();
         } catch (err) {
             console.warn('Delete error:', err);
         }
@@ -554,105 +536,8 @@ class TempMail {
     }
 
     /* ==========================================================
-       HTTP HELPER (with detailed error handling)
-       ========================================================== */
-
-    async request(path, options = {}, requiresAuth = false) {
-        const headers = { 'Accept': 'application/json' };
-
-        if (options.body) {
-            headers['Content-Type'] = 'application/json';
-        }
-
-        if (requiresAuth) {
-            if (!this.token) return null;
-            headers['Authorization'] = `Bearer ${this.token}`;
-        }
-
-        let response;
-        try {
-            response = await fetch(`${this.BASE_URL}${path}`, {
-                method: options.method || 'GET',
-                headers,
-                body: options.body ? JSON.stringify(options.body) : undefined,
-                mode: 'cors',
-                cache: 'no-store'
-            });
-        } catch (networkErr) {
-            console.error('Network error on', path, networkErr);
-            throw new Error(
-                'Network blocked. Disable ad-blockers or try incognito.'
-            );
-        }
-
-        // Auth expired / invalid
-        if (response.status === 401) {
-            return null;
-        }
-
-        // Rate limited
-        if (response.status === 429) {
-            throw new Error('Rate limited. Wait 60s and retry.');
-        }
-
-        // Forbidden
-        if (response.status === 403) {
-            throw new Error('Request forbidden (403).');
-        }
-
-        if (!response.ok) {
-            let detail = `Request failed (${response.status})`;
-            try {
-                const err = await response.json();
-                detail = err['hydra:description'] || err.message || err.detail || detail;
-            } catch (_) { /* ignore */ }
-            throw new Error(detail);
-        }
-
-        if (response.status === 204) return {};
-
-        return response.json();
-    }
-
-    /**
-     * Normalize Mail.tm collection responses.
-     */
-    getCollection(data) {
-        if (!data) return [];
-        if (Array.isArray(data)) return data;
-        if (Array.isArray(data['hydra:member'])) return data['hydra:member'];
-        if (Array.isArray(data.member)) return data.member;
-        return [];
-    }
-
-    /* ==========================================================
        UTILITIES
        ========================================================== */
-
-    randomString(length, includeSymbols = false) {
-        const letters = 'abcdefghijklmnopqrstuvwxyz';
-        const digits = '0123456789';
-        const symbols = '!@#$%^&*';
-        let charset = letters + digits + letters.toUpperCase();
-        if (includeSymbols) charset += symbols;
-
-        const cryptoObj = window.crypto || window.msCrypto;
-        if (cryptoObj && cryptoObj.getRandomValues) {
-            const bytes = new Uint8Array(length);
-            cryptoObj.getRandomValues(bytes);
-            let out = '';
-            for (let i = 0; i < length; i++) {
-                out += charset[bytes[i] % charset.length];
-            }
-            return out;
-        }
-
-        let out = '';
-        for (let i = 0; i < length; i++) {
-            out += charset[Math.floor(Math.random() * charset.length)];
-        }
-        return out;
-    }
 
     formatDate(dateStr, full = false) {
         if (!dateStr) return '';
